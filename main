@@ -20,11 +20,15 @@
 <body class="p-4 flex flex-col items-center justify-center min-h-screen">
 
     <div id="app" class="w-full max-w-md bg-white shadow-xl rounded-2xl p-6 md:p-8">
+        <!-- 헤더 섹션 -->
         <header class="text-center mb-6">
             <h1 class="text-3xl font-extrabold text-indigo-800">배터리 수명 예측기</h1>
             <p class="text-sm text-gray-500 mt-1">내부 임피던스(Re, Rct) 기반 다중 회귀 모델 시뮬레이션</p>
         </header>
+
+        <!-- 입력 폼 섹션 -->
         <div class="space-y-4">
+            
             <div>
                 <label for="reInput" class="block text-sm font-medium text-gray-700">옴 저항 (Re, Ω)</label>
                 <div class="mt-1">
