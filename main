@@ -1,0 +1,173 @@
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>배터리 수명 예측기 (Re, Rct)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f7f9fb;
+        }
+        .capacity-bar {
+            transition: width 0.5s ease-in-out;
+        }
+        input::placeholder {
+            color: #9ca3af;
+        }
+    </style>
+</head>
+<body class="p-4 flex flex-col items-center justify-center min-h-screen">
+
+    <div id="app" class="w-full max-w-md bg-white shadow-xl rounded-2xl p-6 md:p-8">
+        <header class="text-center mb-6">
+            <h1 class="text-3xl font-extrabold text-indigo-800">배터리 수명 예측기</h1>
+            <p class="text-sm text-gray-500 mt-1">내부 임피던스(Re, Rct) 기반 다중 회귀 모델 시뮬레이션</p>
+        </header>
+        <div class="space-y-4">
+            <div>
+                <label for="reInput" class="block text-sm font-medium text-gray-700">옴 저항 (Re, Ω)</label>
+                <div class="mt-1">
+                    <input type="number" id="reInput" placeholder="예시: 0.05" step="0.01"
+                           class="w-full p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 shadow-sm"
+                           value="">
+                </div>
+            </div>
+
+            <div>
+                <label for="rctInput" class="block text-sm font-medium text-gray-700">전하 이동 저항 (Rct, Ω)</label>
+                <div class="mt-1">
+                    <input type="number" id="rctInput" placeholder="예시: 0.15" step="0.01"
+                           class="w-full p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 shadow-sm"
+                           value="">
+                </div>
+            </div>
+
+            <button id="predictButton"
+                    class="w-full flex justify-center py-3 px-4 border border-transparent rounded-lg shadow-md text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition duration-150 ease-in-out">
+                SOH 예측 및 수명 진단 시작
+            </button>
+        </div>
+
+        <div id="resultBox" class="mt-6 p-5 border-2 rounded-xl" style="display: none;">
+            <h2 class="text-lg font-bold mb-3 text-gray-800">📋 진단 결과</h2>
+            
+            <div class="mb-4">
+                <p class="text-sm font-medium text-gray-600 flex justify-between">
+                    <span>예측 잔존 용량 (SOH)</span>
+                    <span id="capacityPercent" class="font-extrabold text-indigo-600">--%</span>
+                </p>
+                <div class="w-full bg-gray-200 rounded-full h-3 mt-1.5 overflow-hidden">
+                    <div id="capacityBar" class="capacity-bar h-3 rounded-full" style="width: 0%; background-color: #4f46e5;"></div>
+                </div>
+            </div>
+
+            <div class="p-3 rounded-lg border bg-opacity-10" id="statusMessageContainer">
+                <p id="statusIcon" class="text-2xl inline-block mr-2 align-middle">...</p>
+                <p id="statusText" class="text-base font-semibold inline-block text-gray-700">진단 결과를 기다리고 있습니다.</p>
+                <p id="statusDetail" class="text-xs mt-1 text-gray-500"></p>
+            </div>
+            
+            <div id="warningMessage" class="mt-4 text-sm font-medium p-3 bg-red-100 text-red-700 rounded-lg hidden">
+                ⚠️ **경고:** 옴 저항(Re)과 전하 이동 저항(Rct) 값은 0보다 크거나 같아야 합니다.
+            </div>
+        </div>
+    </div>
+
+    <footer class="mt-6 text-center">
+        <p class="text-xs text-gray-400 font-light tracking-wide">2025 꿈두레 데이터과학과 머신러닝
+        <p class="text-xs text-gray-400 font-light tracking-wide">20708 서지민</p>
+    </footer>
+
+    <script>
+        const INTERCEPT = 1.1307; 
+        const COEF_RE = 2.3605;   
+        const COEF_RCT = -3.9040; 
+
+        const EOL_THRESHOLD = 0.80; 
+
+        const reInput = document.getElementById('reInput');
+        const rctInput = document.getElementById('rctInput');
+        const predictButton = document.getElementById('predictButton');
+        const resultBox = document.getElementById('resultBox');
+        const capacityPercentDisplay = document.getElementById('capacityPercent');
+        const capacityBar = document.getElementById('capacityBar');
+        const statusMessageContainer = document.getElementById('statusMessageContainer');
+        const statusIcon = document.getElementById('statusIcon');
+        const statusText = document.getElementById('statusText');
+        const statusDetail = document.getElementById('statusDetail');
+        const warningMessage = document.getElementById('warningMessage');
+
+
+        function toFixedNoScientific(num, fixed) {
+            if (Math.abs(num) < 1.0) {
+                const s = num.toFixed(20);
+                return s.match(new RegExp('^-?\\d+(?:.\\d{0,' + (fixed || -1) + '})?'))[0];
+            } else {
+                return num.toString().match(new RegExp('^-?\\d+(?:.\\d{0,' + (fixed || -1) + '})?'))[0];
+            }
+        }
+
+        function performPrediction() {
+            const ReVal = parseFloat(reInput.value);
+            const RctVal = parseFloat(rctInput.value);
+
+            if (isNaN(ReVal) || isNaN(RctVal) || ReVal < 0 || RctVal < 0) {
+                warningMessage.classList.remove('hidden');
+                resultBox.style.display = 'none';
+                return;
+            } else {
+                warningMessage.classList.add('hidden');
+            }
+
+            let predictedCapacity = INTERCEPT + (COEF_RE * ReVal) + (COEF_RCT * RctVal);
+
+            predictedCapacity = Math.max(0.00, Math.min(1.00, predictedCapacity));
+
+            const capacityPercentage = predictedCapacity * 100;
+            const percentageDisplay = toFixedNoScientific(capacityPercentage, 2);
+
+            resultBox.style.display = 'block';
+            capacityPercentDisplay.textContent = `${percentageDisplay}%`;
+            capacityBar.style.width = `${capacityPercentage}%`;
+            
+            let status = '';
+            let icon = '';
+            let detail = '';
+            let barColor = '';
+            let statusBgColor = '';
+            let statusBorderColor = '';
+
+            if (predictedCapacity >= 0.95) {
+                status = '매우 우수 (Excellent)';
+                icon = '✨';
+                detail = '새 배터리에 가까운 최적의 성능을 유지하고 있습니다.';
+                barColor = 'bg-green-600';
+                statusBgColor = 'bg-green-100';
+                statusBorderColor = 'border-green-300';
+            } else if (predictedCapacity >= EOL_THRESHOLD) {
+                status = '정상 범위 (Good)';
+                icon = '👍';
+                detail = `잔존 용량이 ${EOL_THRESHOLD * 100}% 이상입니다. 정상 사용 가능합니다.`;
+                barColor = 'bg-indigo-600';
+                statusBgColor = 'bg-indigo-100';
+                statusBorderColor = 'border-indigo-300';
+            } else {
+                status = '수명 종료 (EOL) 임박';
+                icon = '🚨';
+                detail = `용량이 ${EOL_THRESHOLD * 100}% 미만으로 떨어졌습니다. 성능 저하 및 교체가 필요합니다.`;
+                barColor = 'bg-red-600';
+                statusBgColor = 'bg-red-100';
+                statusBorderColor = 'border-red-300';
+            }
+            capacityBar.className = `capacity-bar h-3 rounded-full ${barColor}`;
+            statusMessageContainer.className = `p-3 rounded-lg border ${statusBgColor} ${statusBorderColor}`;
+            statusIcon.textContent = icon;
+            statusText.textContent = status;
+            statusDetail.textContent = detail;
+        }
+
+        predictButton.addEventListener('click', performPrediction);
+    </script>
+</body>
+</html>
